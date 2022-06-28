@@ -87,11 +87,10 @@ class CTArender {
             icon.CTAlock = lock;
             icon.alpha = opacity;
             icon.tint = tint;
-            icon.angle = token.data.rotation
+            icon.angle = 0
             if (belowToken) { icon.zIndex = -1 }
             else { icon.zIndex = 1000 }
         }
-
     }
 
     /**
@@ -189,7 +188,7 @@ class CTA {
          * @param {String} name 
          */
     static hasAnim(token, name) {
-        let anims = token.document.getFlag("Custom-Token-Animations", "anim")
+        let anims = token.data.flags["Custom-Token-Animations"]?.anim;
         if (!anims) return false;
         for (let testAnim of anims) {
             if (testAnim.name === name) return true;
@@ -198,8 +197,10 @@ class CTA {
     }
 
 
-
-    static async addAnimation(token, textureData, pushActor, name, oldID) {
+    static async getEquippedItems(token) {
+        return (token.data.flags["Custom-Token-Animations"]?.anim || []).map(a => ({ itemId: a.itemId, hand: a.hand }));
+    }
+    static async addAnimation(token, textureData, pushActor, name, oldID, itemId, hand) {
         if (typeof textureData === "string") {
             let presets = game.settings.get("Custom-Token-Animations", "presets")
             textureData = presets.find(i => i.name === textureData)
@@ -222,7 +223,9 @@ class CTA {
                 flagData.push({
                     name: name[i],
                     textureData: textureData[i],
-                    id: flagId
+                    id: flagId,
+                    itemId,
+                    hand,
                 })
             }
         }
@@ -231,11 +234,36 @@ class CTA {
             flagData.push({
                 name: name,
                 textureData: textureData,
-                id: flagId
+                id: flagId,
+                itemId,
+                hand,
             })
         }
 
         CTA.PushFlags(token, flagData, pushActor)
+    }
+
+    static async removeAll(token, actorRemoval, fadeOut) {
+        if(!token) console.error("No token provided to removeAnim")
+        if (typeof token === "string") token = canvas.tokens.get(token)
+        if (!game.user.isGM) {
+            CTAsocket.executeAsGM("removeAll", token, actorRemoval, fadeOut);
+            return;
+        }
+        let tokenFlags = Array.from(token.data.flags["Custom-Token-Animations"]?.anim || [])
+
+        if(tokenFlags.length) {
+            for(var i=0;i<=tokenFlags.length-1;i++) {
+                if(tokenFlags[i].id) {
+                    await this.removeAnim(token, tokenFlags[i].id, actorRemoval, true)
+                } else {
+                    tokenFlags.splice(i,1);
+                    await token.document.update({ "flags.Custom-Token-Animations.anim": tokenFlags })
+                    await this.removeAll(token, actorRemoval, fadeOut);
+                    break;
+                }
+            }
+        }
     }
 
     static async removeAnim(token, animId, actorRemoval, fadeOut) {
@@ -254,7 +282,7 @@ class CTA {
         if (actorRemoval) {
             let actorAnimRemove = actorFlags.findIndex(i => i.id === animId)
             actorFlags.splice(actorAnimRemove, 1)
-            await token.actor.update({ "token.flags.Custom-Token-Animations.anim": actorFlags })
+            await token.actor.update({ "token.flags.Custom-Token-Animations.anim": [actorFlags] })
         }
         let fade = fadeOut || game.settings.get("Custom-Token-Animations", "fadeOut")
 
@@ -266,6 +294,24 @@ class CTA {
         }
     }
 
+    static async removeByItemId(token, itemId, actorRemoval, fadeOut) {
+        if(!token) console.error("No token provided to removeAnim")
+        if (typeof token === "string") token = canvas.tokens.get(token)
+        if (!game.user.isGM) {
+            CTAsocket.executeAsGM("removeById", token.id, animId, actorRemoval, fadeOut);
+            return;
+        }
+        let tokenFlags = Array.from(token.data.flags["Custom-Token-Animations"]?.anim || [])
+        let toRemove = tokenFlags.filter(i => i.itemId === itemId);
+        if(toRemove.length) {
+            for(let i=0;i<=toRemove.length-1;i++) {
+                await this.removeAnim(token, toRemove[i].id, actorRemoval, fadeOut)
+            }
+            return true;
+        }
+        return false;
+    }
+
     static removeAnimByName(token, animName, actorRemoval, fadeOut) {
         if(!token) console.error("No token provided to removeAnimByName")
         if (typeof token === "string") token = canvas.tokens.get(token)
@@ -273,11 +319,11 @@ class CTA {
             CTAsocket.executeAsGM("removeByName", token.id, animName, actorRemoval, fadeOut);
             return;
         }
-        let tokenFlags = Array.from(token.document.getFlag("Custom-Token-Animations", "anim") || [])
+        let tokenFlags = token.data.flags["Custom-Token-Animations"]?.anim || [];
         if (!Array.isArray(animName)) animName = [animName]
         animName.forEach(a => {
             let removedAnim = tokenFlags.find(i => i.name === a)
-            CTA.removeAnim(token.id, removedAnim.id, actorRemoval, fadeOut)
+            if(removedAnim) CTA.removeAnim(token.id, removedAnim.id, actorRemoval, fadeOut)
         })
     }
 
@@ -774,10 +820,14 @@ Hooks.once("socketlib.ready", () => {
     CTAsocket = socketlib.registerModule("Custom-Token-Animations");
     CTAsocket.register("renderAnim", CTArender.RenderAnim)
     CTAsocket.register("removeByName", CTA.removeAnimByName)
+    CTAsocket.register("removeByItemId", CTA.removeByItemId)
     CTAsocket.register("removeById", CTA.removeAnim)
+    CTAsocket.register("removeAll", CTA.removeAll)
     CTAsocket.register("addAnimation", CTA.addAnimation)
+    CTAsocket.register("hasAnim", CTA.hasAnim)
     CTAsocket.register("fadeOut", CTArender.FadeAnim)
-    CTAsocket.register("deleteSpecific", CTArender.DeleteSpecificAnim)
+    CTAsocket.register("deleteSpecific", CTArender.DeleteSpecificAnim);
+    CTAsocket.register("getEquippedItems", CTA.getEquippedItems);
 })
 
 
